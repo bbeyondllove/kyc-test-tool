@@ -1,0 +1,47 @@
+# Python:
+*.py[cod]
+*.so
+*.egg
+*.egg-info
+dist
+build
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# LivePortrait large files
+LivePortrait/pretrained_weights/
+LivePortrait/*.pth
+LivePortrait/*/*.pth
+LivePortrait/weights/
+*.pth
+*.onnx
+*.pkl
+
+# Test outputs
+kyc_test/
+output/
+*.mp4
+*.avi
+*.jpg
+*.png
+
+# Temporary files
+*.tmp
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# System files

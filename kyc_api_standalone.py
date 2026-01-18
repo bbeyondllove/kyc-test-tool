@@ -89,7 +89,6 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import time
-import json
 from enum import Enum
 
 app = FastAPI(
@@ -139,13 +138,8 @@ async def log_requests(request: Request, call_next):
         raise
 
 # 导入 KYC 测试模块
-import kyc_idcard_test
-import kyc_video_test
 import kyc_full_test
 import liveportrait_server
-
-idcard_client = kyc_idcard_test.KYCTestClient()
-video_client = kyc_video_test.KYCVideoTestClient()
 
 # ========== LivePortrait 模型预加载 ==========
 
@@ -182,161 +176,38 @@ class ActionEnum(str, Enum):
 # ========== API 端点 ==========
 
 
-@app.get("/")
-async def root():
-    """根路径"""
-    return {
-        "service": "KYC 测试 API",
-        "version": "1.0.0",
-        "docs": "/docs"
-    }
-
-
-@app.get("/idcard/verify", tags=["身份证认证"])
-async def verify_id_card(user_id: str = Query(None, description="用户ID，不指定则自动生成随机用户")):
-    """
-    身份证认证接口
-
-    **参数:**
-    - **user_id**: 可选，指定用户ID，不指定则自动生成随机用户
-    """
-    try:
-        logger.info(f"[身份证认证] 开始 - user_id: {user_id}")
-
-        if user_id:
-            output_dir = os.path.join("./kyc_test", user_id)
-            front_path = os.path.join(output_dir, "idcard_front.png")
-            back_path = os.path.join(output_dir, "idcard_back.png")
-
-            if not os.path.exists(front_path) or not os.path.exists(back_path):
-                logger.warning(f"[身份证认证] 用户身份证文件不存在 - user_id: {user_id}")
-                raise HTTPException(status_code=404, detail="未找到用户身份证文件")
-
-            success = idcard_client.run_full_idcard_test(user_id, front_path, back_path)
-        else:
-            # 使用 kyc_full_test 生成随机用户并测试
-            logger.info("[身份证认证] 生成随机用户...")
-            user_id, front_image, back_image, _, _ = kyc_full_test.generate_random_user_with_avatar()
-            success = idcard_client.run_full_idcard_test(user_id, front_image, back_image)
-
-        logger.info(f"[身份证认证] 完成 - user_id: {user_id}, success: {success}")
-        return {
-            "success": success,
-            "user_id": user_id,
-            "message": "认证成功" if success else "认证失败"
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[身份证认证] 异常 - user_id: {user_id}, error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/video/verify", tags=["视频认证"])
-async def verify_video(
-    user_id: str = Query(..., description="用户ID"),
-    action: ActionEnum = Query(ActionEnum.left_shake, description="动作类型")
-):
-    """
-    视频认证接口
-
-    **参数:**
-    - **user_id**: 用户ID（必填）
-    - **action**: 动作类型 (mouth_open, left_shake, right_shake, nod, all)
-    """
-    try:
-        logger.info(f"[视频认证] 开始 - user_id: {user_id}, action: {action}")
-
-        output_dir = os.path.join("./kyc_test", user_id)
-        os.makedirs(output_dir, exist_ok=True)
-
-        avatar_path = os.path.join(output_dir, "avatar.png")
-        if not os.path.exists(avatar_path):
-            logger.warning(f"[视频认证] 用户头像不存在 - user_id: {user_id}")
-            raise HTTPException(status_code=404, detail="未找到用户头像，请先进行身份证认证")
-
-        # 确定动作
-        if action == ActionEnum.all:
-            actions = list(kyc_full_test.ACTION_DRIVERS.keys())
-        else:
-            actions = [action.value]
-
-        logger.info(f"[视频认证] 动作列表: {actions}")
-
-        # 人脸采集
-        collect_result = video_client.collect_face(user_id, avatar_path)
-        time.sleep(1)
-
-        # 生成视频（如果需要）
-        video_paths = {}
-        for act in actions:
-            video_path = os.path.join(output_dir, f"{act}.mp4")
-            # 使用 kyc_full_test 生成视频
-            driving_video = kyc_full_test.ACTION_DRIVERS.get(act)
-            if driving_video:
-                driving_path = os.path.join(kyc_full_test.LIVEPORTRAIT_DIR, "assets", "examples", "driving", driving_video)
-                if os.path.exists(driving_path):
-                    kyc_full_test.generate_video_with_liveportrait(avatar_path, driving_path, video_path)
-            if os.path.exists(video_path):
-                video_paths[act] = video_path
-
-        if not video_paths:
-            logger.error(f"[视频认证] 视频生成失败 - user_id: {user_id}")
-            raise HTTPException(status_code=500, detail="视频生成失败")
-
-        # 验证视频
-        results = video_client.run_all_actions_test(user_id, video_paths, avatar_path=avatar_path)
-
-        success = any(r.get("code") == 0 for r in results.values())
-        logger.info(f"[视频认证] 完成 - user_id: {user_id}, success: {success}, results: {results}")
-
-        return {
-            "success": success,
-            "user_id": user_id,
-            "videos": {k: v.get("code") == 0 for k, v in results.items()},
-            "message": "认证成功" if success else "认证失败"
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[视频认证] 异常 - user_id: {user_id}, error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/full/test/sync", tags=["完整流程"])
-async def full_test_sync(
+@app.get("/auto_kyc", tags=["自动KYC"])
+async def auto_kyc(
     user_id: str = Query(None, description="用户ID，不指定则自动生成随机用户"),
     action: ActionEnum = Query(ActionEnum.left_shake, description="视频动作类型")
 ):
     """
-    同步完整流程测试（等待完成）
+    自动KYC完整流程（身份证认证 + 视频认证）
 
     **参数:**
-    - **user_id**: 可选，指定用户ID
-    - **action**: 视频动作类型
+    - **user_id**: 可选，指定用户ID，不指定则自动生成随机用户
+    - **action**: 视频动作类型 (mouth_open, left_shake, right_shake, nod, all)
     """
     try:
-        logger.info(f"[完整流程] 开始 - user_id: {user_id}, action: {action}")
+        logger.info(f"[Auto KYC] 开始 - user_id: {user_id}, action: {action}")
 
         actions = [action.value] if action != ActionEnum.all else list(kyc_full_test.ACTION_DRIVERS.keys())
 
         if not user_id:
-            logger.info("[完整流程] 生成随机用户...")
+            logger.info("[Auto KYC] 生成随机用户...")
             user_id, _, _, _, output_dir = kyc_full_test.generate_random_user_with_avatar()
         else:
             output_dir = os.path.join("./kyc_test", user_id)
             os.makedirs(output_dir, exist_ok=True)
 
-        logger.info(f"[完整流程] 运行 KYC 流程 - user_id: {user_id}, actions: {actions}")
+        logger.info(f"[Auto KYC] 运行 KYC 流程 - user_id: {user_id}, actions: {actions}")
         results = kyc_full_test.run_full_kyc_flow(user_id, output_dir, actions, False)
 
         status_map = {0: "未完成", 1: "认证中", 2: "已完成"}
         final_status = results.get("final_status")
         final_status_text = status_map.get(final_status, "未知")
 
-        logger.info(f"[完整流程] 完成 - user_id: {user_id}, final_status: {final_status}({final_status_text})")
+        logger.info(f"[Auto KYC] 完成 - user_id: {user_id}, final_status: {final_status}({final_status_text})")
         return {
             "success": results.get("final_status") == 2,
             "user_id": user_id,
@@ -352,7 +223,7 @@ async def full_test_sync(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[完整流程] 异常 - user_id: {user_id}, error: {str(e)}")
+        logger.error(f"[Auto KYC] 异常 - user_id: {user_id}, error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

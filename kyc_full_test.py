@@ -24,17 +24,17 @@ from pathlib import Path
 import urllib.request
 import ssl
 import io
+import string
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 import cv2
 
 # 修复 Windows 控制台编码问题
-if sys.platform == 'win32':
+if sys.platform == 'win32' and not os.environ.get('DISABLE_STDOUT_WRAP'):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # KYC API 配置
-KYC_API_URL = "http://localhost:8080/api/process"
+KYC_API_URL = "https://kyc-testnet.chainlessdw20.com/api/process"
 
 # 导入身份证生成器模块
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -108,17 +108,12 @@ def prepare_test_images(input_path, output_dir, resize_for_ocr=True):
 
 def generate_random_user_data(sex=None):
     """生成随机用户数据"""
-    name_info = name_utils.random_name()
-
     if sex:
-        target_sex_code = 0 if sex == '女' else 1
-        for _ in range(10):
-            name_info = name_utils.random_name()
-            if name_info['sex'] == target_sex_code:
-                break
-        if name_info['sex'] != target_sex_code:
-            name_info['sex'] = target_sex_code
-            name_info['sex_text'] = sex
+        # 如果指定了性别，直接使用 random_name_with_sex 生成对应性别的姓名
+        name_info = name_utils.random_name_with_sex(sex)
+    else:
+        # 未指定性别，随机生成
+        name_info = name_utils.random_name()
 
     year = random.randint(1960, 2005)
     month = random.randint(1, 12)
@@ -151,54 +146,42 @@ def generate_random_user_data(sex=None):
         "valid_period": f"{start_time}-{expire_time}"
     }
 
-def download_random_avatar(max_retries=5):
-    """下载随机头像，支持重试和更好的 SSL 处理"""
-    for attempt in range(max_retries):
-        try:
-            print(f"下载头像 (尝试 {attempt + 1}/{max_retries})...", end=" ")
-            url = "https://thispersondoesnotexist.com"
+def get_random_avatar(gender=None):
+    """
+    从本地 avatars 文件夹获取随机头像
 
-            # 创建更宽松的 SSL 上下文
-            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            # 禁用一些过时的协议
-            context.options |= getattr(ssl, 'OP_LEGACY_SERVER_CONNECT', 0)
+    Args:
+        gender: 性别 '男' 或 '女'，不指定则随机
 
-            request = urllib.request.Request(
-                url,
-                headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Accept-Encoding': 'identity',
-                    'Connection': 'keep-alive',
-                    'Upgrade-Insecure-Requests': '1'
-                }
-            )
+    Returns:
+        tuple: (PIL.Image 头像图片, 性别 '男'/'女'/None)
+    """
+    avatars_dir = Path("./avatars")
+    if not avatars_dir.exists():
+        raise Exception("avatars 文件夹不存在，请先运行 download_avatars.py 下载头像")
 
-            with urllib.request.urlopen(request, context=context, timeout=30) as response:
-                image_data = response.read()
+    if gender is None:
+        if random.random() < 0.5:
+            gender = '男'
+        else:
+            gender = '女'
 
-            if len(image_data) < 1000:
-                print(f"失败: 下载的图片太小 ({len(image_data)} bytes)")
-                time.sleep(2)
-                continue
+    if gender == '男':
+        folder = avatars_dir / "male"
+    elif gender == '女':
+        folder = avatars_dir / "female"
+    else:
+        folder = avatars_dir / "unknown"
 
-            avatar = Image.open(io.BytesIO(image_data))
-            detected_gender = random.choice(['男', '女'])
-            print(f"成功! 性别: {detected_gender}")
-            return avatar, detected_gender
+    avatar_files = list(folder.glob("*.png"))
+    if not avatar_files:
+        raise Exception(f"{gender} 文件夹为空，请先运行 download_avatars.py 下载头像")
 
-        except (urllib.error.URLError, ssl.SSLError) as e:
-            print(f"失败: SSL/网络错误 - {type(e).__name__}")
-            if attempt < max_retries - 1:
-                time.sleep(3)
-        except Exception as e:
-            print(f"失败: {type(e).__name__}: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(3)
+    avatar_path = random.choice(avatar_files)
+    avatar = Image.open(avatar_path)
 
-    return None, None
+    return avatar, gender
+
 
 def change_background(img, img_back, zoom_size, center):
     """抠图并粘贴到背景"""
@@ -441,6 +424,10 @@ class KYCFullTestClient:
             self.results["videos"][action] = True
         else:
             print(f"  -> {action} 验证失败 (code={code}): {result.get('msg', '')}")
+            if result.get('data'):
+                print(f"     数据: {json.dumps(result.get('data'), ensure_ascii=False, indent=2)}")
+            if result.get('error'):
+                print(f"     错误: {result.get('error')} - {result.get('message', '')}")
             self.results["videos"][action] = False
 
         return result
@@ -472,32 +459,51 @@ class KYCFullTestClient:
 
 # ========== 视频生成 ==========
 
-def find_cuda_python():
-    """查找支持CUDA的Python"""
-    possible_pythons = [
-        str(LIVEPORTRAIT_DIR.parent / "venv" / "Scripts" / "python.exe"),  # 项目虚拟环境
-        str(LIVEPORTRAIT_DIR / "venv" / "Scripts" / "python.exe"),  # LivePortrait 虚拟环境
-        r"C:\Python312\python.exe",
-        sys.executable,
-    ]
+# 全局 LivePortrait 服务实例
+_liveportrait_service = None
 
-    for py in possible_pythons:
-        if os.path.exists(py):
-            try:
-                test_cmd = [py, "-c", "import torch; exit(0 if torch.cuda.is_available() else 1)"]
-                result = subprocess.run(test_cmd, capture_output=True, timeout=10)
-                if result.returncode == 0:
-                    return py
-            except:
-                continue
 
-    return sys.executable
+def set_liveportrait_service(service):
+    """设置 LivePortrait 服务实例"""
+    global _liveportrait_service
+    _liveportrait_service = service
+
+
+def get_liveportrait_service():
+    """获取 LivePortrait 服务实例"""
+    return _liveportrait_service
+
 
 def generate_video_with_liveportrait(source_image, driving_source, output_path):
     """使用LivePortrait生成视频"""
     output_path = Path(output_path) if isinstance(output_path, str) else output_path
     print(f"  生成视频: {Path(driving_source).stem} -> {output_path.name}")
 
+    # 如果有预加载的服务，使用它（API 模式）
+    if _liveportrait_service is not None:
+        # 从 driving_source 提取 action 名称
+        driving_name = Path(driving_source).stem
+        # 反查 action
+        action = None
+        for a, d in ACTION_DRIVERS.items():
+            if driving_name == Path(d).stem:
+                action = a
+                break
+
+        if action:
+            import liveportrait_server
+            output_dir = os.path.dirname(output_path)
+            result_path = liveportrait_server.generate_video_by_action(source_image, action, output_dir)
+            if result_path and os.path.exists(result_path):
+                # 移动到目标路径
+                if result_path != output_path:
+                    import shutil
+                    shutil.move(result_path, output_path)
+                print(f"  -> 视频生成成功: {output_path.name}")
+                return True
+            return False
+
+    # 原来的 subprocess 方式（命令行模式）
     liveportrait_inference = LIVEPORTRAIT_DIR / "inference.py"
 
     if not liveportrait_inference.exists():
@@ -516,7 +522,12 @@ def generate_video_with_liveportrait(source_image, driving_source, output_path):
     driving_path_abs = str(driving_path)
     output_parent_abs = os.path.abspath(output_path.parent)
 
-    python_exe = find_cuda_python()
+    # 使用 venv 中的 Python (CUDA 支持)
+    python_exe = os.path.join(os.path.dirname(os.path.abspath(__file__)), "venv", "Scripts", "python.exe")
+    if not os.path.exists(python_exe):
+        python_exe = r"C:\Python312\python.exe"
+    if not os.path.exists(python_exe):
+        python_exe = sys.executable
 
     cmd = [
         python_exe,
@@ -534,9 +545,9 @@ def generate_video_with_liveportrait(source_image, driving_source, output_path):
             cwd=str(LIVEPORTRAIT_DIR),
             capture_output=True,
             text=True,
-            timeout=120,  # GPU 模式 2 分钟足够
+            timeout=60,
             encoding='utf-8',
-            errors='ignore',  # 忽略编码错误
+            errors='ignore',
             env=env
         )
 
@@ -572,7 +583,7 @@ def generate_video_with_liveportrait(source_image, driving_source, output_path):
 # ========== 完整流程 ==========
 
 def run_full_kyc_flow(user_id, output_dir, actions_to_test, skip_video_generate=False):
-    """运行完整 KYC 流程"""
+    """运行完整 KYC 流程（身份证认证失败则停止）"""
     client = KYCFullTestClient()
 
     # ========== 第一阶段: 身份证认证 ==========
@@ -588,7 +599,10 @@ def run_full_kyc_flow(user_id, output_dir, actions_to_test, skip_video_generate=
     client.verify_idcard_front(user_id, front_path)
 
     if not client.results["idcard_front"]:
-        print("\n正面认证失败，终止流程")
+        print("\n❌ 身份证认证失败，终止流程，不进行动作认证")
+        print_section("测试结果")
+        print(f"用户ID: {user_id}")
+        print(f"身份证正面: ❌ 失败")
         return client.results
 
     time.sleep(1)
@@ -600,7 +614,11 @@ def run_full_kyc_flow(user_id, output_dir, actions_to_test, skip_video_generate=
     client.verify_idcard_back(user_id, back_path)
 
     if not client.results["idcard_back"]:
-        print("\n反面认证失败")
+        print("\n❌ 身份证反面认证失败，终止流程，不进行动作认证")
+        print_section("测试结果")
+        print(f"用户ID: {user_id}")
+        print(f"身份证正面: ✅ 通过")
+        print(f"身份证反面: ❌ 失败")
         return client.results
 
     time.sleep(1)
@@ -646,6 +664,8 @@ def run_full_kyc_flow(user_id, output_dir, actions_to_test, skip_video_generate=
         for action, video_path in video_paths.items():
             client.verify_video(user_id, video_path, action)
             time.sleep(1)
+    else:
+        print("\n❌ 没有可用的视频文件")
 
     # ========== 第三阶段: 最终状态查询 ==========
     print_step(3, "最终状态查询")
@@ -656,14 +676,14 @@ def run_full_kyc_flow(user_id, output_dir, actions_to_test, skip_video_generate=
     print_section("测试结果汇总")
 
     print(f"用户ID: {user_id}")
-    print(f"身份证正面: {'通过' if client.results['idcard_front'] else '失败'}")
-    print(f"身份证反面: {'通过' if client.results['idcard_back'] else '失败'}")
-    print(f"人脸采集: {'通过' if client.results['collect_face'] else '失败'}")
+    print(f"身份证正面: {'✅ 通过' if client.results['idcard_front'] else '❌ 失败'}")
+    print(f"身份证反面: {'✅ 通过' if client.results['idcard_back'] else '❌ 失败'}")
+    print(f"人脸采集: {'✅ 通过' if client.results['collect_face'] else '❌ 失败'}")
 
     if client.results['videos']:
         print("视频验证:")
         for action, passed in client.results['videos'].items():
-            print(f"  {action}: {'通过' if passed else '失败'}")
+            print(f"  {action}: {'✅ 通过' if passed else '❌ 失败'}")
 
     status_map = {0: "未完成", 1: "认证中", 2: "已完成"}
     print(f"最终状态: {status_map.get(client.results['final_status'], '未知')}")
@@ -674,142 +694,148 @@ def run_full_kyc_flow(user_id, output_dir, actions_to_test, skip_video_generate=
 
 def main():
     parser = argparse.ArgumentParser(description='KYC 完整认证流程测试脚本')
-    parser.add_argument('--random', action='store_true', help='随机模式：自动生成新用户并完成完整认证')
-    parser.add_argument('--count', type=int, default=1, help='随机测试次数')
-    parser.add_argument('--user-id', type=str, help='使用模式：指定已有用户ID进行测试')
-    parser.add_argument('--source', type=str, help='身份证图片路径（使用模式必需）')
-    parser.add_argument('--avatar', type=str, help='头像图片路径（使用模式可选）')
-    parser.add_argument('--actions', type=str, nargs='+',
+    parser.add_argument('--user_id', type=str, default=None, help='用户ID（可选，不指定则自动生成随机用户）')
+    parser.add_argument('--action', type=str,
                         choices=['mouth_open', 'left_shake', 'right_shake', 'nod', 'all'],
-                        default=['left_shake'],
-                        help='要测试的视频动作')
-    parser.add_argument('--skip-video-generate', action='store_true',
-                        help='跳过视频生成，使用已有视频')
+                        default='left_shake',
+                        help='要测试的视频动作（默认: left_shake）')
 
     args = parser.parse_args()
 
-    # 检查参数互斥
-    if args.random and args.user_id:
-        print("错误: --random 和 --user-id 不能同时使用")
-        print("  随机模式: python kyc_full_test.py --random [--count N]")
-        print("  使用模式: python kyc_full_test.py --user-id XXX [--source YYY]")
-        return
-
-    if 'all' in args.actions:
+    # 确定要测试的动作
+    if args.action == 'left_shake':
+        actions_to_test = ['left_shake']
+    elif args.action == 'all':
         actions_to_test = ['mouth_open', 'left_shake', 'right_shake', 'nod']
     else:
-        actions_to_test = args.actions
+        actions_to_test = [args.action]
 
     print_section("KYC 完整认证流程测试")
     print(f"API地址: {KYC_API_URL}")
     print(f"测试动作: {', '.join(actions_to_test)}")
 
     # ========== 随机模式 ==========
-    if args.random:
-        success_count = 0
-        fail_count = 0
+    if not args.user_id:
+        print("随机模式：生成新用户...")
 
-        for i in range(args.count):
-            print(f"\n{'#'*70}")
-            print(f"# 第 {i+1}/{args.count} 次测试")
-            print(f"{'#'*70}")
+        try:
+            # 1. 生成用户数据（包含随机性别）
+            print_step(1, "生成用户数据")
+            user_data = generate_random_user_data()
+            user_id = user_data['user_id']
+            user_gender = user_data['sex']
 
-            try:
-                # 1. 下载头像
-                print_step(1, "下载头像")
-                avatar_image, detected_gender = download_random_avatar(max_retries=5)
+            print(f"  用户ID: {user_id}")
+            print(f"  姓名: {user_data['name']}")
+            print(f"  性别: {user_gender}")
+            print(f"  身份证号: {user_data['id_card']}")
 
-                if avatar_image is None:
-                    print("无法下载头像，跳过此测试")
-                    fail_count += 1
-                    continue
+            # 2. 根据性别获取头像
+            print_step(2, "获取头像")
+            avatar_image, detected_gender = get_random_avatar(gender=user_gender)
 
-                # 2. 生成用户数据
-                print_step(2, "生成用户数据")
-                user_data = generate_random_user_data(sex=detected_gender)
+            if avatar_image is None:
+                print("无法获取头像，测试终止")
+                return
 
-                print(f"  用户ID: {user_data['user_id']}")
-                print(f"  姓名: {user_data['name']}")
-                print(f"  性别: {user_data['sex']}")
-                print(f"  身份证号: {user_data['id_card']}")
+            # 3. 创建输出目录
+            output_dir = os.path.join("./kyc_test", user_id)
+            os.makedirs(output_dir, exist_ok=True)
 
-                # 3. 创建输出目录
-                output_dir = os.path.join("./kyc_test", user_data['user_id'])
-                os.makedirs(output_dir, exist_ok=True)
+            # 4. 生成身份证
+            print_step(3, "生成身份证")
+            avatar_path = os.path.join(output_dir, "avatar.png")
+            temp_idcard_path = os.path.join(output_dir, f"temp_idcard.png")
 
-                # 4. 生成身份证
-                print_step(3, "生成身份证")
-                avatar_path = os.path.join(output_dir, "avatar.png")
-                temp_idcard_path = os.path.join(output_dir, f"temp_idcard.png")
+            color_path, bw_path, saved_avatar_path = generate_idcard_image(
+                user_data, avatar_image, temp_idcard_path, avatar_output_path=avatar_path
+            )
 
-                color_path, bw_path, saved_avatar_path = generate_idcard_image(
-                    user_data, avatar_image, temp_idcard_path, avatar_output_path=avatar_path
-                )
+            # 5. 裁剪正反面
+            prepare_test_images(color_path, output_dir)
 
-                # 5. 裁剪正反面
-                prepare_test_images(color_path, output_dir)
+            # 6. 删除临时文件
+            for f in [color_path, bw_path]:
+                try:
+                    if os.path.exists(f):
+                        os.remove(f)
+                except:
+                    pass
 
-                # 6. 删除临时文件
-                for f in [color_path, bw_path]:
-                    try:
-                        if os.path.exists(f):
-                            os.remove(f)
-                    except:
-                        pass
+            # 7. 运行完整流程
+            print_step(4, "运行KYC认证流程")
+            run_full_kyc_flow(user_id, output_dir, actions_to_test, False)
 
-                # 7. 运行完整流程
-                print_step(4, "运行KYC认证流程")
-                results = run_full_kyc_flow(
-                    user_data['user_id'],
-                    output_dir,
-                    actions_to_test,
-                    args.skip_video_generate
-                )
-
-                # 8. 统计结果
-                if (results['idcard_front'] and results['idcard_back'] and
-                    all(results['videos'].values()) and results['final_status'] == 2):
-                    success_count += 1
-                else:
-                    fail_count += 1
-
-            except Exception as e:
-                print(f"\n测试失败: {e}")
-                import traceback
-                traceback.print_exc()
-                fail_count += 1
-
-            if i < args.count - 1:
-                time.sleep(2)
-
-        print_section("总体测试结果")
-        print(f"成功: {success_count}, 失败: {fail_count}")
+        except Exception as e:
+            print(f"\n❌ 测试失败: {e}")
 
     # ========== 使用模式 ==========
     else:
-        if not args.user_id:
-            print("错误: 使用模式需要指定 --user-id 参数")
-            print("  使用模式: python kyc_full_test.py --user-id XXX [--source YYY]")
-            return
-
-        output_dir = os.path.join("./kyc_test", args.user_id)
+        user_id = args.user_id
+        output_dir = os.path.join("./kyc_test", user_id)
         os.makedirs(output_dir, exist_ok=True)
 
-        # 准备身份证
-        if args.source:
-            prepare_test_images(args.source, output_dir)
-        else:
-            print("请提供身份证图片路径 (--source)")
+        print(f"使用已有用户: {user_id}")
+
+        # 检查身份证文件
+        front_path = os.path.join(output_dir, "idcard_front.png")
+        back_path = os.path.join(output_dir, "idcard_back.png")
+
+        if not os.path.exists(front_path) or not os.path.exists(back_path):
+            print(f"❌ 未找到身份证文件，请先运行: python kyc_idcard_test.py {user_id}")
             return
 
-        # 准备头像
-        avatar_path = args.avatar or os.path.join(output_dir, "avatar.png")
-        if not os.path.exists(avatar_path):
-            print(f"头像不存在: {avatar_path}")
-            return
+        # 运行完整流程
+        run_full_kyc_flow(user_id, output_dir, actions_to_test, False)
 
-        # 运行流程
-        run_full_kyc_flow(args.user_id, output_dir, actions_to_test, args.skip_video_generate)
+
+# ========== 辅助函数（用于 API 调用） ==========
+
+
+def generate_random_user_with_avatar():
+    """
+    生成随机用户并获取头像（简化版，用于 API）
+
+    Returns:
+        tuple: (user_id, front_image, back_image, avatar_path, output_dir)
+    """
+    # 先生成用户数据（包含随机性别）
+    user_data = generate_random_user_data()
+    user_id = user_data['user_id']
+    user_gender = user_data['sex']
+
+    # 根据性别获取头像
+    avatar_image, detected_gender = get_random_avatar(gender=user_gender)
+    if avatar_image is None:
+        raise Exception("无法获取头像")
+
+    # 创建输出目录
+    output_dir = os.path.join("./kyc_test", user_id)
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 生成身份证
+    avatar_path = os.path.join(output_dir, "avatar.png")
+    temp_color_path = os.path.join(output_dir, f"temp_idcard.png")
+
+    color_path, bw_path, saved_avatar_path = generate_idcard_image(
+        user_data,
+        avatar_image=avatar_image,
+        output_path=temp_color_path,
+        avatar_output_path=avatar_path
+    )
+
+    # 裁剪正反面
+    front_image, back_image = prepare_test_images(color_path, output_dir)
+
+    # 删除临时文件
+    for f in [color_path, bw_path]:
+        try:
+            if os.path.exists(f):
+                os.remove(f)
+        except:
+            pass
+
+    return user_id, front_image, back_image, avatar_path, output_dir
 
 
 if __name__ == "__main__":

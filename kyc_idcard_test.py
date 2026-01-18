@@ -14,19 +14,18 @@ import calendar
 import urllib.request
 import ssl
 import io
+from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 import cv2
 
 # 修复 Windows 控制台编码问题
-if sys.platform == 'win32':
-    import io
+if sys.platform == 'win32' and not os.environ.get('DISABLE_STDOUT_WRAP'):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 
 # KYC API 配置
-KYC_API_URL = "http://localhost:8080/api/process"
+KYC_API_URL = "https://kyc-testnet.chainlessdw20.com/api/process"
 
 # 导入身份证生成器模块
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -129,22 +128,12 @@ def generate_random_user_data(sex=None):
         dict: 包含用户ID、姓名、性别、民族、出生日期、住址、身份证号、签发机关、有效期限
     """
     # 生成姓名（根据性别）
-    name_info = name_utils.random_name()
-
-    # 如果指定了性别，重新生成直到匹配
     if sex:
-        target_sex_code = 0 if sex == '女' else 1
-        max_attempts = 10
-
-        for _ in range(max_attempts):
-            name_info = name_utils.random_name()
-            if name_info['sex'] == target_sex_code:
-                break
-
-        # 如果重试后仍不匹配，手动修正性别文本
-        if name_info['sex'] != target_sex_code:
-            name_info['sex'] = target_sex_code
-            name_info['sex_text'] = sex
+        # 如果指定了性别，直接使用 random_name_with_sex 生成对应性别的姓名
+        name_info = name_utils.random_name_with_sex(sex)
+    else:
+        # 未指定性别，随机生成
+        name_info = name_utils.random_name()
 
     # 随机出生日期
     year = random.randint(1960, 2005)
@@ -184,9 +173,51 @@ def generate_random_user_data(sex=None):
     }
 
 
-def download_random_avatar():
+def get_random_avatar(gender=None):
     """
-    从 thispersondoesnotexist.com 下载随机 AI 生成的头像并检测性别
+    从本地 avatars 文件夹获取随机头像
+
+    Args:
+        gender: 性别 '男' 或 '女'，不指定则随机
+
+    Returns:
+        tuple: (PIL.Image 头像图片, 性别 '男'/'女'/None)
+    """
+    avatars_dir = Path("./avatars")
+    if not avatars_dir.exists():
+        raise Exception("avatars 文件夹不存在，请先运行 download_avatars.py 下载头像")
+
+    # 确定从哪个文件夹获取
+    if gender is None:
+        # 随机选择性别文件夹
+        if random.random() < 0.5:
+            gender = '男'
+        else:
+            gender = '女'
+
+    if gender == '男':
+        folder = avatars_dir / "male"
+    elif gender == '女':
+        folder = avatars_dir / "female"
+    else:
+        folder = avatars_dir / "unknown"
+
+    # 获取所有头像文件
+    avatar_files = list(folder.glob("*.png"))
+    if not avatar_files:
+        raise Exception(f"{gender} 文件夹为空，请先运行 download_avatars.py 下载头像")
+
+    # 随机选择一张
+    avatar_path = random.choice(avatar_files)
+    avatar = Image.open(avatar_path)
+
+    return avatar, gender
+
+
+# 保留旧的在线下载函数以兼容
+def download_random_avatar_online():
+    """
+    从 thispersondoesnotexist.com 下载随机 AI 生成的头像并检测性别（备用方案）
 
     Returns:
         tuple: (PIL.Image 头像图片, 性别 '男'/'女'/None)
@@ -198,7 +229,6 @@ def download_random_avatar():
     except ImportError:
         deepface_available = False
         print("警告: DeepFace 未安装，将使用随机性别")
-        print("      安装: pip install deepface")
 
     try:
         url = "https://thispersondoesnotexist.com"
@@ -228,9 +258,21 @@ def download_random_avatar():
                     result = result[0]
 
                 dominant_gender = result.get('dominant_gender', None)
-                if dominant_gender == 'Woman':
+                gender = result.get('gender', None)
+
+                if dominant_gender is not None:
+                    gender_value = dominant_gender
+                elif gender is not None:
+                    if isinstance(gender, dict):
+                        gender_value = max(gender, key=gender.get)
+                    else:
+                        gender_value = gender
+                else:
+                    gender_value = None
+
+                if gender_value == 'Woman':
                     detected_gender = '女'
-                elif dominant_gender == 'Man':
+                elif gender_value == 'Man':
                     detected_gender = '男'
 
                 if detected_gender:
@@ -732,166 +774,121 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description='KYC 证件认证测试脚本')
-    parser.add_argument('--random', action='store_true', help='使用随机生成的测试数据')
-    parser.add_argument('--count', type=int, default=1, help='随机测试次数（仅在使用 --random 时有效）')
-    parser.add_argument('--user-id', type=str, default=None, help='指定用户ID（用于与视频测试保持一致）')
-    parser.add_argument('--source', type=str, default='color.png', help='身份证图片路径（不使用随机模式时）')
-    parser.add_argument('--no-avatar', action='store_true', help='不使用自动抠图（仅随机模式）')
+    parser.add_argument('--user_id', type=str, default=None, help='用户ID（可选，不指定则自动生成随机用户）')
+    parser.add_argument('--action', type=str, default='verify', help='操作类型')
 
     args = parser.parse_args()
 
     client = KYCTestClient()
 
-    if args.random:
-        # 随机模式：生成多组随机数据进行测试
-        print("=" * 60)
-        print(f"KYC 证件认证随机测试 (共 {args.count} 次)")
-        print("=" * 60)
-        print(f"API地址: {KYC_API_URL}")
-        if args.user_id:
-            print(f"指定用户ID: {args.user_id}")
-        print("=" * 60)
+    print("=" * 60)
+    print("KYC 证件认证测试")
+    print("=" * 60)
+    print(f"API地址: {KYC_API_URL}")
+    print("=" * 60)
 
-        success_count = 0
-        fail_count = 0
+    if args.user_id:
+        # 使用已有用户ID，查找已有的身份证图片
+        user_id = args.user_id
+        output_dir = os.path.join("./kyc_test", user_id)
 
-        for i in range(args.count):
-            print(f"\n{'#'*60}")
-            print(f"# 第 {i+1}/{args.count} 次测试")
-            print(f"{'#'*60}")
+        print(f"用户ID: {user_id}")
 
-            try:
-                # 1. 先下载头像并检测性别
-                print(f"\n正在下载头像并检测性别...")
-                avatar_image, detected_gender = download_random_avatar()
+        # 检查已有的身份证图片
+        front_path = os.path.join(output_dir, "idcard_front.png")
+        back_path = os.path.join(output_dir, "idcard_back.png")
 
-                if avatar_image is None:
-                    print("\n❌ 无法下载头像")
-                    fail_count += 1
-                    continue
+        if os.path.exists(front_path) and os.path.exists(back_path):
+            print(f"\n找到已有的身份证图片: {output_dir}")
+            print(f"  正面: {front_path}")
+            print(f"  反面: {back_path}")
 
-                # 2. 根据检测到的性别生成用户数据
-                user_data = generate_random_user_data(sex=detected_gender)
+            # 执行测试
+            success = client.run_full_idcard_test(user_id, front_path, back_path)
 
-                # 如果指定了 user_id，使用指定的；否则使用随机生成的
-                if args.user_id:
-                    user_data['user_id'] = args.user_id
+            if success:
+                print("\n✅ 所有测试通过!")
+                print(f"\n💡 视频测试命令:")
+                print(f"   python kyc_video_test.py  --user_id {user_id}")
+            else:
+                print("\n❌ 测试未完全通过")
+        else:
+            print(f"\n❌ 未找到用户 {user_id} 的身份证图片")
+            print(f"   请确保 {front_path} 和 {back_path} 存在")
+            return
+    else:
+        # 随机模式：生成新用户
+        print("随机模式：生成新用户...")
 
-                # 打印生成的用户信息
-                print(f"\n📋 生成的用户信息:")
-                print(f"   用户ID: {user_data['user_id']}")
-                print(f"   姓名: {user_data['name']}")
-                print(f"   性别: {user_data['sex']}")
-                print(f"   身份证号: {user_data['id_card']}")
-                print(f"   地址: {user_data['address']}")
+        try:
+            # 1. 先生成用户数据（包含性别）
+            user_data = generate_random_user_data()
+            user_id = user_data['user_id']
+            user_gender = user_data['sex']
 
-                # 为每个用户创建独立文件夹（与视频测试共用）
-                output_dir = os.path.join("./kyc_test", user_data['user_id'])
-                os.makedirs(output_dir, exist_ok=True)
+            # 2. 根据性别从本地获取头像
+            print(f"\n正在获取头像（性别: {user_gender}）...")
+            avatar_image, detected_gender = get_random_avatar(gender=user_gender)
 
-                # 头像保存路径
-                avatar_path = os.path.join(output_dir, "avatar.png")
+            if avatar_image is None:
+                print("\n❌ 无法获取头像")
+                return
 
-                # 生成临时身份证图片（用于裁剪）
-                temp_color_path = os.path.join(output_dir, f"temp_idcard_{user_data['user_id']}.png")
+            print(f"\n📋 生成的用户信息:")
+            print(f"   用户ID: {user_id}")
+            print(f"   姓名: {user_data['name']}")
+            print(f"   性别: {user_data['sex']}")
+            print(f"   身份证号: {user_data['id_card']}")
+            print(f"   地址: {user_data['address']}")
 
-                color_path, bw_path, saved_avatar_path = generate_idcard_image(
-                    user_data,
-                    avatar_image=avatar_image,
-                    output_path=temp_color_path,
-                    auto_bg=not args.no_avatar,
-                    avatar_output_path=avatar_path
-                )
+            # 3. 创建输出目录
+            output_dir = os.path.join("./kyc_test", user_id)
+            os.makedirs(output_dir, exist_ok=True)
 
-                # 裁剪正面和反面，保存为 idcard_front.png 和 idcard_back.png
-                front_image, back_image = prepare_test_images(color_path, output_dir)
+            # 4. 生成身份证
+            avatar_path = os.path.join(output_dir, "avatar.png")
+            temp_color_path = os.path.join(output_dir, f"temp_idcard_{user_id}.png")
 
-                # 删除临时完整身份证图片
+            color_path, bw_path, saved_avatar_path = generate_idcard_image(
+                user_data,
+                avatar_image=avatar_image,
+                output_path=temp_color_path,
+                auto_bg=True,
+                avatar_output_path=avatar_path
+            )
+
+            # 5. 裁剪正反面
+            front_image, back_image = prepare_test_images(color_path, output_dir)
+
+            # 6. 删除临时文件
+            for f in [color_path, bw_path]:
                 try:
-                    if os.path.exists(color_path):
-                        os.remove(color_path)
-                    if os.path.exists(bw_path):
-                        os.remove(bw_path)
+                    if os.path.exists(f):
+                        os.remove(f)
                 except:
                     pass
 
-                if front_image is None or back_image is None:
-                    print("\n❌ 无法准备测试图片")
-                    fail_count += 1
-                    continue
+            if front_image is None or back_image is None:
+                print("\n❌ 无法准备测试图片")
+                return
 
-                # 执行测试（包含人脸采集）
-                success = client.run_full_idcard_test(
-                    user_data['user_id'],
-                    front_image,
-                    back_image,
-                    avatar_path=saved_avatar_path
-                )
+            # 7. 执行测试
+            success = client.run_full_idcard_test(
+                user_id,
+                front_image,
+                back_image,
+                avatar_path=saved_avatar_path
+            )
 
-                if success:
-                    success_count += 1
-                else:
-                    fail_count += 1
-
+            if success:
+                print("\n✅ 所有测试通过!")
                 print(f"\n💡 视频测试命令:")
-                if saved_avatar_path:
-                    print(f"   python kyc_video_test.py --user-id {user_data['user_id']}")
-                else:
-                    print(f"   python kyc_video_test.py --user-id {user_data['user_id']}")
+                print(f"   python kyc_video_test.py --user_id {user_id}")
+            else:
+                print("\n❌ 测试未完全通过")
 
-            except Exception as e:
-                print(f"\n❌ 测试失败: {e}")
-                fail_count += 1
-
-            # 测试间隔
-            if i < args.count - 1:
-                time.sleep(2)
-
-        # 打印测试总结
-        print(f"\n{'='*60}")
-        print(f"测试完成!")
-        print(f"成功: {success_count}, 失败: {fail_count}")
-        print(f"{'='*60}")
-
-    else:
-        # 传统模式：使用现有的身份证图片
-        user_id = args.user_id if args.user_id else "1001529777"
-        source_image = args.source
-
-        # 为用户创建独立文件夹
-        output_dir = os.path.join("./kyc_test", user_id)
-        os.makedirs(output_dir, exist_ok=True)
-
-        print("=" * 60)
-        print("KYC 证件认证测试")
-        print("=" * 60)
-        print(f"用户ID: {user_id}")
-        print(f"源图片: {source_image}")
-        print(f"API地址: {KYC_API_URL}")
-        print("=" * 60)
-
-        # 自动准备测试图片
-        front_image, back_image = prepare_test_images(source_image, output_dir)
-
-        if front_image is None or back_image is None:
-            print("\n❌ 无法准备测试图片，测试终止")
-            print("提示: 请先运行身份证生成器 (main.py) 生成 color.png 图片")
-            print("       或者使用 --random 参数进行随机测试")
-            return
-
-        print(f"\n正面图片: {front_image}")
-        print(f"反面图片: {back_image}")
-        print("=" * 60)
-
-        # 执行完整测试
-        success = client.run_full_idcard_test(user_id, front_image, back_image)
-
-        if success:
-            print("\n✅ 所有测试通过!")
-            print(f"\n💡 视频测试命令:")
-            print(f"   python kyc_video_test.py --user-id {user_id} --idcard-front {front_image}")
-        else:
-            print("\n❌ 测试未完全通过")
+        except Exception as e:
+            print(f"\n❌ 测试失败: {e}")
 
 
 if __name__ == "__main__":

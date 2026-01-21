@@ -457,6 +457,11 @@ class KYCFullTestClient:
 
         return result
 
+    def get_user_info(self, user_id):
+        """获取用户信息"""
+        result = self._make_request_no_file("get_user_info", user_id)
+        return result
+
 # ========== 视频生成 ==========
 
 # 全局 LivePortrait 服务实例

@@ -191,6 +191,65 @@ async def auto_kyc(
     try:
         logger.info(f"[Auto KYC] 开始 - user_id: {user_id}, action: {action}")
 
+        # 验证 user_id 格式（如果指定了）
+        if user_id is not None:
+            if not user_id.isdigit():
+                logger.error(f"[Auto KYC] user_id 格式错误: {user_id}")
+                raise HTTPException(status_code=400, detail="user_id 必须为纯数字")
+
+        # 获取用户状态（如果有 user_id）
+        user_info = None
+        if user_id:
+            client = kyc_full_test.KYCFullTestClient()
+            status_result = client.get_user_status(user_id)
+
+            logger.info(f"[Auto KYC] 状态查询完整返回 - user_id: {user_id}, result: {status_result}")
+
+            # 检查状态查询是否成功
+            if status_result and status_result.get("code") == 0:
+                data = status_result.get("data", {})
+                current_status = data.get("status")
+
+                logger.info(f"[Auto KYC] 用户状态查询 - user_id: {user_id}, status: {current_status}")
+
+                # status = 2 表示已完成 KYC
+                if current_status == 2:
+                    logger.info(f"[Auto KYC] 用户已完成 KYC，获取用户详细信息 - user_id: {user_id}")
+                    info_result = client.get_user_info(user_id)
+                    logger.info(f"[Auto KYC] get_user_info 返回 - user_id: {user_id}, result: {info_result}")
+
+                    if info_result and info_result.get("code") == 0:
+                        info_data = info_result.get("data", {})
+                        logger.info(f"[Auto KYC] 用户信息获取成功 - user_id: {user_id}, data: {info_data}")
+
+                        # 删除不需要的字段
+                        info_data.pop("CardFaceFeature", None)
+                        info_data.pop("VideoFaceFeature", None)
+                        info_data.pop("LastVideoFaceFeature", None)
+                        info_data.pop("VideoFace", None)
+                        info_data.pop("VideoPath", None)
+                        info_data.pop("VideoFaceFeatureType", None)
+                        info_data.pop("Operate", None)
+                        info_data.pop("PassportImage", None)
+
+                        # 直接返回用户信息中的字段（不需要其他包装字段）
+                        return info_data
+                    else:
+                        logger.warning(f"[Auto KYC] 获取用户信息失败 - user_id: {user_id}")
+                        # 即使获取用户信息失败，也返回已完成的标记
+                        return {
+                            "success": True,
+                            "user_id": user_id,
+                            "final_status": 2,
+                            "final_status_text": "已完成",
+                            "message": "用户已完成 KYC 认证（用户信息获取失败）",
+                            "idcard_front": True,
+                            "idcard_back": True,
+                            "collect_face": True,
+                            "videos": {"completed": True},
+                            "skipped": True
+                        }
+
         actions = [action.value] if action != ActionEnum.all else list(kyc_full_test.ACTION_DRIVERS.keys())
 
         if not user_id:
@@ -208,16 +267,35 @@ async def auto_kyc(
         final_status_text = status_map.get(final_status, "未知")
 
         logger.info(f"[Auto KYC] 完成 - user_id: {user_id}, final_status: {final_status}({final_status_text})")
+
+        # 如果 KYC 通过，获取用户详细信息
+        if final_status == 2:
+            logger.info(f"[Auto KYC] KYC 通过，获取用户详细信息 - user_id: {user_id}")
+            client = kyc_full_test.KYCFullTestClient()
+            info_result = client.get_user_info(user_id)
+            logger.info(f"[Auto KYC] KYC流程后 get_user_info 返回 - user_id: {user_id}, result: {info_result}")
+
+            if info_result and info_result.get("code") == 0:
+                info_data = info_result.get("data", {})
+                logger.info(f"[Auto KYC] 用户信息获取成功 - user_id: {user_id}")
+
+                # 删除不需要的字段
+                info_data.pop("CardFaceFeature", None)
+                info_data.pop("VideoFaceFeature", None)
+                info_data.pop("LastVideoFaceFeature", None)
+                info_data.pop("VideoFace", None)
+                info_data.pop("VideoPath", None)
+                info_data.pop("VideoFaceFeatureType", None)
+                info_data.pop("Operate", None)
+                info_data.pop("PassportImage", None)
+
+                # 直接返回用户信息
+                return info_data
+
+        # KYC 未通过，返回基础信息
         return {
-            "success": results.get("final_status") == 2,
-            "user_id": user_id,
-            "idcard_front": results.get("idcard_front", False),
-            "idcard_back": results.get("idcard_back", False),
-            "collect_face": results.get("collect_face", False),
-            "videos": results.get("videos", {}),
-            "final_status": results.get("final_status"),
-            "final_status_text": final_status_text,
-            "message": "测试完成" if results.get("final_status") == 2 else "未完成"
+            "success": False,
+            "user_id": user_id
         }
 
     except HTTPException:

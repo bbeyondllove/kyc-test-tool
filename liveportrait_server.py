@@ -80,6 +80,7 @@ class LivePortraitService:
             source=source_image_path,
             driving=driving_video_path,
             output_dir=os.path.dirname(output_path),
+            flag_write_concat=False,  # KYC流程不需要concat视频
         )
 
         # 创建输出目录
@@ -100,6 +101,10 @@ class LivePortraitService:
                 return False
 
         except Exception as e:
+            import traceback
+            print(f"[LivePortrait] 生成视频失败: {str(e)}")
+            print(f"[LivePortrait] 源图片: {source_image_path}, 驱动视频: {driving_video_path}, 输出: {output_path}")
+            traceback.print_exc()
             return False
 
 # 全局服务实例
@@ -117,11 +122,13 @@ def get_service():
 # 驱动视频目录
 DRIVING_DIR = LIVEPORTRAIT_DIR / "assets" / "examples" / "driving"
 
+# ========== 动作映射配置（统一定义） ==========
+# 其他模块应从此处导入，避免多处重复定义
 ACTION_DRIVERS = {
-    "mouth_open": "d20.mp4",
-    "left_shake": "left_shake.mp4",
-    "right_shake": "d10.mp4",
-    "nod": "d11.mp4",
+    "mouth_open": "mouth_open.mp4",   # 张嘴
+    "left_shake": "left_shake.mp4",   # 左摇头
+    "right_shake": "right_shake.mp4", # 右摇头
+    "nod": "nod.mp4",                 # 点头
 }
 
 
@@ -137,20 +144,28 @@ def generate_video_by_action(avatar_path, action, output_dir):
     Returns:
         str: 生成的视频路径，失败返回 None
     """
+    print(f"[LivePortrait] 开始生成视频: action={action}, avatar={avatar_path}, output_dir={output_dir}")
+
     driving_filename = ACTION_DRIVERS.get(action)
     if not driving_filename:
+        print(f"[LivePortrait] 错误: 不支持的动作 {action}")
         return None
 
     driving_path = DRIVING_DIR / driving_filename
     if not driving_path.exists():
+        print(f"[LivePortrait] 错误: 驱动视频不存在: {driving_path}")
         return None
 
     output_path = os.path.join(output_dir, f"{action}.mp4")
 
     service = get_service()
-    if service.generate_video(avatar_path, str(driving_path), output_path):
+    result = service.generate_video(avatar_path, str(driving_path), output_path)
+    if result:
+        print(f"[LivePortrait] 生成成功: {output_path}")
         return output_path
-    return None
+    else:
+        print(f"[LivePortrait] 生成失败: {output_path}")
+        return None
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """
 KYC 测试 API 服务
 使用现有功能模块
-运行：uvicorn kyc_api_standalone:app --host 0.0.0.0 --port 8003
+运行：uvicorn kyc_api_standalone:app --host 0.0.0.0 --port 9000
 """
 import os
 import sys
@@ -70,26 +70,33 @@ logger.info("=" * 60)
 logger.info(f"KYC API 服务启动 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 logger.info(f"日志文件: {LOG_FILE}")
 
-# 重定向标准输出，避免 emoji 编码问题
-class NullWriter:
-    def write(self, *args, **kwargs):
-        pass
-    def flush(self, *args, **kwargs):
+# 重定向标准输出到日志
+class StreamToLogger:
+    def __init__(self, logger, level=logging.INFO):
+        self.logger = logger
+        self.level = level
+        self.linebuf = ''
+
+    def write(self, buf):
+        for line in buf.rstrip().splitlines():
+            self.logger.log(self.level, line.rstrip())
+
+    def flush(self):
         pass
 
 if os.environ.get('DISABLE_STDOUT_WRAP'):
     import sys
-    sys.stdout = NullWriter()
-    sys.stderr._original_stderr = sys.stderr.__class__
+    sys.stdout = StreamToLogger(logger, logging.INFO)
+    sys.stderr = StreamToLogger(logger, logging.WARNING)
 
 # 导入路径设置
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 import uvicorn
 import time
-from enum import Enum
 
 app = FastAPI(
     title="KYC 测试 API",
@@ -164,100 +171,26 @@ async def shutdown_event():
     logger.info(f"KYC API 服务关闭 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 
-class ActionEnum(str, Enum):
-    """支持的认证动作"""
-    mouth_open = "mouth_open"
-    left_shake = "left_shake"
-    right_shake = "right_shake"
-    nod = "nod"
-    all = "all"
-
-
 # ========== API 端点 ==========
 
 
 @app.get("/auto_kyc", tags=["自动KYC"])
 async def auto_kyc(
-    user_id: str = Query(None, description="用户ID，不指定则自动生成随机用户"),
-    action: ActionEnum = Query(ActionEnum.left_shake, description="视频动作类型")
+    action: str = Query("mouth_open", description="视频动作类型: mouth_open, left_shake, right_shake, nod")
 ):
     """
-    自动KYC完整流程（身份证认证 + 视频认证）
+    自动KYC完整流程（生成身份证正/反面照片 + 身份证认证 + 人脸采集 + 生成动作视频 + 视频认证）
 
     **参数:**
-    - **user_id**: 可选，指定用户ID，不指定则自动生成随机用户
-    - **action**: 视频动作类型 (mouth_open, left_shake, right_shake, nod, all)
+    - **action**: 视频动作类型 (mouth_open, left_shake, right_shake, nod)
     """
     try:
-        logger.info(f"[Auto KYC] 开始 - user_id: {user_id}, action: {action}")
+        logger.info(f"[Auto KYC] 开始 - action: {action}")
 
-        # 验证 user_id 格式（如果指定了）
-        if user_id is not None:
-            if not user_id.isdigit():
-                logger.error(f"[Auto KYC] user_id 格式错误: {user_id}")
-                raise HTTPException(status_code=400, detail="user_id 必须为纯数字")
+        actions = [action]
 
-        # 获取用户状态（如果有 user_id）
-        user_info = None
-        if user_id:
-            client = kyc_full_test.KYCFullTestClient()
-            status_result = client.get_user_status(user_id)
-
-            logger.info(f"[Auto KYC] 状态查询完整返回 - user_id: {user_id}, result: {status_result}")
-
-            # 检查状态查询是否成功
-            if status_result and status_result.get("code") == 0:
-                data = status_result.get("data", {})
-                current_status = data.get("status")
-
-                logger.info(f"[Auto KYC] 用户状态查询 - user_id: {user_id}, status: {current_status}")
-
-                # status = 2 表示已完成 KYC
-                if current_status == 2:
-                    logger.info(f"[Auto KYC] 用户已完成 KYC，获取用户详细信息 - user_id: {user_id}")
-                    info_result = client.get_user_info(user_id)
-                    logger.info(f"[Auto KYC] get_user_info 返回 - user_id: {user_id}, result: {info_result}")
-
-                    if info_result and info_result.get("code") == 0:
-                        info_data = info_result.get("data", {})
-                        logger.info(f"[Auto KYC] 用户信息获取成功 - user_id: {user_id}, data: {info_data}")
-
-                        # 删除不需要的字段
-                        info_data.pop("CardFaceFeature", None)
-                        info_data.pop("VideoFaceFeature", None)
-                        info_data.pop("LastVideoFaceFeature", None)
-                        info_data.pop("VideoFace", None)
-                        info_data.pop("VideoPath", None)
-                        info_data.pop("VideoFaceFeatureType", None)
-                        info_data.pop("Operate", None)
-                        info_data.pop("PassportImage", None)
-
-                        # 直接返回用户信息中的字段（不需要其他包装字段）
-                        return info_data
-                    else:
-                        logger.warning(f"[Auto KYC] 获取用户信息失败 - user_id: {user_id}")
-                        # 即使获取用户信息失败，也返回已完成的标记
-                        return {
-                            "success": True,
-                            "user_id": user_id,
-                            "final_status": 2,
-                            "final_status_text": "已完成",
-                            "message": "用户已完成 KYC 认证（用户信息获取失败）",
-                            "idcard_front": True,
-                            "idcard_back": True,
-                            "collect_face": True,
-                            "videos": {"completed": True},
-                            "skipped": True
-                        }
-
-        actions = [action.value] if action != ActionEnum.all else list(kyc_full_test.ACTION_DRIVERS.keys())
-
-        if not user_id:
-            logger.info("[Auto KYC] 生成随机用户...")
-            user_id, _, _, _, output_dir = kyc_full_test.generate_random_user_with_avatar()
-        else:
-            output_dir = os.path.join("./kyc_test", user_id)
-            os.makedirs(output_dir, exist_ok=True)
+        logger.info("[Auto KYC] 生成随机用户...")
+        user_id, _, _, _, output_dir = kyc_full_test.generate_random_user_with_avatar()
 
         logger.info(f"[Auto KYC] 运行 KYC 流程 - user_id: {user_id}, actions: {actions}")
         results = kyc_full_test.run_full_kyc_flow(user_id, output_dir, actions, False)
@@ -291,11 +224,22 @@ async def auto_kyc(
 
                 # 直接返回用户信息
                 return info_data
+            else:
+                # KYC 通过但获取详细信息失败（网络错误等）
+                logger.warning(f"[Auto KYC] KYC 通过但获取用户详细信息失败 - user_id: {user_id}")
+                return {
+                    "success": True,
+                    "user_id": user_id,
+                    "final_status": 2,
+                    "final_status_text": "已完成",
+                    "message": "KYC 认证成功，但获取详细信息失败（可能为网络问题）"
+                }
 
         # KYC 未通过，返回基础信息
         return {
             "success": False,
-            "user_id": user_id
+            "user_id": user_id,
+            "final_status": final_status
         }
 
     except HTTPException:
@@ -306,4 +250,4 @@ async def auto_kyc(
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8003)
+    uvicorn.run(app, host="0.0.0.0", port=9000)

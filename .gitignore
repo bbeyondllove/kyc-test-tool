@@ -27,7 +27,6 @@ LivePortrait/weights/
 # Test outputs
 kyc_test/
 output/
-*.mp4
 *.avi
 *.jpg
 *.png

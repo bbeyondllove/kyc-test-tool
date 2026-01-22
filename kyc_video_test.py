@@ -24,18 +24,13 @@ KYC_API_URL = "https://kyc-testnet.chainlessdw20.com/api/process"
 # LivePortrait 路径
 LIVEPORTRAIT_DIR = Path(__file__).parent / "LivePortrait"
 
-# 动作对应的 driving video/template
-ACTION_DRIVERS = {
-    "mouth_open": "d20.mp4",          # 张嘴
-    "left_shake": "left_shake.mp4",   # 左摇头
-    "right_shake": "d10.mp4",         # 右摇头
-    "nod": "d11.mp4",                 # 点头
-}
+# 从 liveportrait_server 导入统一的动作映射配置
+from liveportrait_server import ACTION_DRIVERS
 
-# 检查根目录是否有自定义 driving 视频
+# 检查根目录是否有自定义 driving 视频（覆盖默认配置）
 CUSTOM_DRIVERS_DIR = Path(__file__).parent
 if CUSTOM_DRIVERS_DIR.exists():
-    for action, default_driver in ACTION_DRIVERS.items():
+    for action in ACTION_DRIVERS.keys():
         custom_driver = CUSTOM_DRIVERS_DIR / f"{action}.mp4"
         if custom_driver.exists():
             ACTION_DRIVERS[action] = str(custom_driver)

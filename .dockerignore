@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 日志和临时文件
+logs/
+*.log
+kyc_test/
+avatars/
+
+# Git
+.git/
+.gitignore
+
+# 测试和文档
+*.md
+*.txt
+!requirements*.txt
+!LivePortrait/requirements*.txt
+
+# 模型权重 (需单独挂载)
+LivePortrait/pretrained_weights/
+
+# 其他
+.DS_Store
+Thumbs.db

@@ -289,7 +289,8 @@ class KYCFullTestClient:
             "idcard_back": None,
             "collect_face": None,
             "videos": {},
-            "final_status": None
+            "final_status": None,
+            "errors": []  # 收集所有错误信息
         }
 
     def _make_request(self, api_type, user_id, file_path, file_type, params=None):
@@ -331,8 +332,15 @@ class KYCFullTestClient:
                 logger.info(f"     姓名: {data.get('real_name', '')}")
             self.results["idcard_front"] = True
         else:
-            logger.info(f"  -> 正面认证失败 (code={code}): {result.get('msg', '')}")
+            error_msg = f"正面认证失败 (code={code}): {result.get('msg', '')}"
+            logger.info(f"  -> {error_msg}")
             self.results["idcard_front"] = False
+            self.results["errors"].append({
+                "step": "idcard_front",
+                "code": code,
+                "message": result.get('msg', ''),
+                "data": result.get('data')
+            })
 
         return result
 
@@ -346,8 +354,15 @@ class KYCFullTestClient:
             logger.info(f"  -> 反面认证成功")
             self.results["idcard_back"] = True
         else:
-            logger.info(f"  -> 反面认证失败 (code={code}): {result.get('msg', '')}")
+            error_msg = f"反面认证失败 (code={code}): {result.get('msg', '')}"
+            logger.info(f"  -> {error_msg}")
             self.results["idcard_back"] = False
+            self.results["errors"].append({
+                "step": "idcard_back",
+                "code": code,
+                "message": result.get('msg', ''),
+                "data": result.get('data')
+            })
 
         return result
 
@@ -385,8 +400,15 @@ class KYCFullTestClient:
             logger.info(f"  -> 人脸采集成功")
             self.results["collect_face"] = True
         else:
-            logger.info(f"  -> 人脸采集失败 (code={code}): {result.get('msg', '')}")
+            error_msg = f"人脸采集失败 (code={code}): {result.get('msg', '')}"
+            logger.info(f"  -> {error_msg}")
             self.results["collect_face"] = False
+            self.results["errors"].append({
+                "step": "collect_face",
+                "code": code,
+                "message": result.get('msg', ''),
+                "data": result.get('data')
+            })
 
         return result
 
@@ -412,12 +434,20 @@ class KYCFullTestClient:
                 logger.info(f"     检测动作: {data['action']}")
             self.results["videos"][action] = True
         else:
-            logger.info(f"  -> {action} 验证失败 (code={code}): {result.get('msg', '')}")
+            error_msg = f"{action} 验证失败 (code={code}): {result.get('msg', '')}"
+            logger.info(f"  -> {error_msg}")
             if result.get('data'):
                 logger.info(f"     数据: {json.dumps(result.get('data'), ensure_ascii=False, indent=2)}")
             if result.get('error'):
                 logger.info(f"     错误: {result.get('error')} - {result.get('message', '')}")
             self.results["videos"][action] = False
+            self.results["errors"].append({
+                "step": f"video_{action}",
+                "action": action,
+                "code": code,
+                "message": result.get('msg', ''),
+                "data": result.get('data')
+            })
 
         return result
 
@@ -727,6 +757,45 @@ def run_full_kyc_flow(user_id, output_dir, actions_to_test, skip_video_generate=
 
     status_map = {0: "未完成", 1: "认证中", 2: "已完成"}
     logger.info(f"最终状态: {status_map.get(client.results['final_status'], '未知')}")
+    
+    # 如果有错误，输出错误摘要
+    if client.results['errors']:
+        logger.info("\n错误详情:")
+        for error in client.results['errors']:
+            logger.info(f"  [{error['step']}] code={error['code']}: {error['message']}")
+            if error.get('data'):
+                # 输出关键数据字段
+                data = error['data']
+                if data.get('repeate_id'):
+                    logger.info(f"    重复ID: {data['repeate_id']}")
+                if data.get('action'):
+                    logger.info(f"    动作: {data['action']}")
+    
+    # 返回格式化的结果（包含错误详情）
+    result_summary = {
+        "success": client.results['final_status'] == 2,
+        "user_id": user_id,
+        "final_status": client.results['final_status'],
+        "status_text": status_map.get(client.results['final_status'], '未知'),
+        "idcard_front": client.results['idcard_front'],
+        "idcard_back": client.results['idcard_back'],
+        "collect_face": client.results['collect_face'],
+        "videos": client.results['videos']
+    }
+    
+    # 如果有错误，添加错误信息
+    if client.results['errors']:
+        result_summary["errors"] = [
+            {
+                "step": err['step'],
+                "code": err['code'],
+                "message": err['message'],
+                "data": err.get('data')  # 包含完整的 data 字段
+            }
+            for err in client.results['errors']
+        ]
+    
+    logger.info(f"\n返回结果: {json.dumps(result_summary, ensure_ascii=False, indent=2)}")
 
     return client.results
 

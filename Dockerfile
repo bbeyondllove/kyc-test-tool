@@ -67,9 +67,8 @@ RUN pip3 install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \
     einops==0.8.1 \
     kornia==0.8.2 \
     facexlib==0.3.0 \
-    insightface==0.7.3 && \
-    pip3 install --no-cache-dir \
-    gfpgan==1.3.8
+    insightface==0.7.3
+ 
 
 # 安装项目依赖（与本地venv一致）
 RUN pip3 install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple \

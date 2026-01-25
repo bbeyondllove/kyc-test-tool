@@ -1,5 +1,5 @@
 """
-KYC 完整认证流程测试脚本（重写版）
+KYC 完整认证流程测试脚本
 整合身份证认证和视频认证，一条命令完成完整KYC流程
 
 使用方法:
@@ -212,21 +212,12 @@ def change_background(img, img_back, zoom_size, center):
 
     return img_back
 
-def generate_idcard_image(user_data, avatar_image, output_path, avatar_output_path=None):
+def generate_idcard_image(user_data, avatar_image, output_path):
     """生成身份证图片"""
     if avatar_image is None:
         raise Exception("头像图片必须提供")
 
     logger.info("生成身份证图片...")
-
-    saved_avatar_path = None
-    if avatar_output_path:
-        try:
-            avatar_image.save(avatar_output_path)
-            saved_avatar_path = avatar_output_path
-            logger.info(f"  头像已保存: {avatar_output_path}")
-        except Exception as e:
-            logger.info(f"  保存头像失败: {e}")
 
     empty_image = Image.open(os.path.join(asserts_dir, 'empty.png'))
     name_font = ImageFont.truetype(os.path.join(asserts_dir, 'fonts/hei.ttf'), 72)
@@ -275,7 +266,7 @@ def generate_idcard_image(user_data, avatar_image, output_path, avatar_output_pa
 
     logger.info(f"  身份证图片已生成: {color_path}")
 
-    return color_path, bw_path, saved_avatar_path
+    return color_path, bw_path
 
 # ========== KYC API 客户端 ==========
 
@@ -736,20 +727,11 @@ def run_full_kyc_flow(user_id, output_dir, actions_to_test, skip_video_generate=
         else:
             driving_source = ACTION_DRIVERS.get(action)
             if driving_source:
-                # 缩放头像后再生成视频（人脸缩小50%）
-                resized_avatar = resize_avatar_for_video(avatar_path, scale=0.5)
-                try:
-                    if generate_video_with_liveportrait(resized_avatar, driving_source, video_path):
-                        video_paths[action] = video_path
-                    else:
-                        logger.info(f"  生成 {action} 视频失败")
-                finally:
-                    # 清理临时缩放文件
-                    if os.path.exists(resized_avatar):
-                        try:
-                            os.remove(resized_avatar)
-                        except:
-                            pass
+                # avatar.png  
+                if generate_video_with_liveportrait(avatar_path, driving_source, video_path):
+                    video_paths[action] = video_path
+                else:
+                    logger.info(f"  生成 {action} 视频失败")
             else:
                 logger.info(f"  不支持的动作: {action}")
 
@@ -898,19 +880,23 @@ def main():
             output_dir = os.path.join("./kyc_test", user_id)
             os.makedirs(output_dir, exist_ok=True)
 
-            # 4. 生成身份证
-            print_step(3, "生成身份证")
+            # 4. 保存头像
             avatar_path = os.path.join(output_dir, "avatar.png")
+            avatar_image.save(avatar_path)
+            logger.info(f"  头像已保存: {avatar_path} ({avatar_image.width}x{avatar_image.height})")
+
+            # 5. 生成身份证
+            print_step(3, "生成身份证")
             temp_idcard_path = os.path.join(output_dir, f"temp_idcard.png")
 
-            color_path, bw_path, saved_avatar_path = generate_idcard_image(
-                user_data, avatar_image, temp_idcard_path, avatar_output_path=avatar_path
+            color_path, bw_path = generate_idcard_image(
+                user_data, avatar_image, temp_idcard_path
             )
 
-            # 5. 裁剪正反面
+            # 6. 裁剪正反面
             prepare_test_images(color_path, output_dir)
 
-            # 6. 删除临时文件
+            # 7. 删除临时文件
             for f in [color_path, bw_path]:
                 try:
                     if os.path.exists(f):
@@ -918,7 +904,7 @@ def main():
                 except:
                     pass
 
-            # 7. 运行完整流程
+            # 8. 运行完整流程
             print_step(4, "运行KYC认证流程")
             run_full_kyc_flow(user_id, output_dir, actions_to_test, False)
 
@@ -969,15 +955,17 @@ def generate_random_user_with_avatar():
     output_dir = os.path.join("./kyc_test", user_id)
     os.makedirs(output_dir, exist_ok=True)
 
-    # 生成身份证
+    # 保存头像
     avatar_path = os.path.join(output_dir, "avatar.png")
+    avatar_image.save(avatar_path)
+
+    # 生成身份证
     temp_color_path = os.path.join(output_dir, f"temp_idcard.png")
 
-    color_path, bw_path, saved_avatar_path = generate_idcard_image(
+    color_path, bw_path = generate_idcard_image(
         user_data,
         avatar_image=avatar_image,
-        output_path=temp_color_path,
-        avatar_output_path=avatar_path
+        output_path=temp_color_path
     )
 
     # 裁剪正反面

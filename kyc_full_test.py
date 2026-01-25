@@ -34,10 +34,10 @@ import cv2
 logger = logging.getLogger(__name__)
 # 清除现有handlers避免重复
 logger.handlers.clear()
-# 强制添加 stderr handler（已被 kyc_api_standalone 捕获）
-handler = logging.StreamHandler(sys.stderr)
+# 强制添加 stdout handler
+handler = logging.StreamHandler(sys.stdout)
 handler.setLevel(logging.INFO)
-handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 # 防止日志传播到root logger造成重复

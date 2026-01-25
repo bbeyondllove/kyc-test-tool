@@ -514,6 +514,36 @@ def get_liveportrait_service():
     return _liveportrait_service
 
 
+def resize_avatar_for_video(avatar_path, scale=0.5):
+    """缩放头像用于视频生成
+    
+    Args:
+        avatar_path: 原始头像路径
+        scale: 缩放比例，默认 0.5（50%）
+    
+    Returns:
+        缩放后的头像路径（临时文件）
+    """
+    # 读取头像
+    avatar = Image.open(avatar_path)
+    
+    # 计算新尺寸
+    new_width = int(avatar.width * scale)
+    new_height = int(avatar.height * scale)
+    
+    # 缩放
+    avatar_resized = avatar.resize((new_width, new_height), Image.Resampling.LANCZOS)
+    
+    # 保存到临时文件
+    avatar_dir = os.path.dirname(avatar_path)
+    avatar_name = os.path.splitext(os.path.basename(avatar_path))[0]
+    resized_path = os.path.join(avatar_dir, f"{avatar_name}_resized.png")
+    avatar_resized.save(resized_path)
+    
+    logger.info(f"  头像已缩放: {avatar.width}x{avatar.height} -> {new_width}x{new_height}")
+    return resized_path
+
+
 def generate_video_with_liveportrait(source_image, driving_source, output_path):
     """使用LivePortrait生成视频"""
     output_path = Path(output_path) if isinstance(output_path, str) else output_path
@@ -574,7 +604,14 @@ def generate_video_with_liveportrait(source_image, driving_source, output_path):
         str(liveportrait_inference),
         "-s", source_image_abs,
         "-d", driving_path_abs,
-        "-o", output_parent_abs
+        "-o", output_parent_abs,
+        "--driving-smooth-observation-variance", "1e-4",  # 极度平滑，最大程度减少抖动
+        "--driving-multiplier", "0.8",  # 降低驱动强度，减少动作幅度
+        "--flag-relative-motion", "True",  # 使用相对运动，更稳定
+        "--flag-do-rot", "True",  # 启用旋转对齐，第一帧正视前方
+        "--flag-normalize-lip", "True",  # 规范化嘴巴初始状态，避免闭眼帧
+        "--animation-region", "pose",  # 只做头部姿态动画，去除表情(Exp)
+        "--no-flag-write-concat"  # 禁用 concat 视频生成
     ]
 
     try:
@@ -699,10 +736,20 @@ def run_full_kyc_flow(user_id, output_dir, actions_to_test, skip_video_generate=
         else:
             driving_source = ACTION_DRIVERS.get(action)
             if driving_source:
-                if generate_video_with_liveportrait(avatar_path, driving_source, video_path):
-                    video_paths[action] = video_path
-                else:
-                    logger.info(f"  生成 {action} 视频失败")
+                # 缩放头像后再生成视频（人脸缩小50%）
+                resized_avatar = resize_avatar_for_video(avatar_path, scale=0.5)
+                try:
+                    if generate_video_with_liveportrait(resized_avatar, driving_source, video_path):
+                        video_paths[action] = video_path
+                    else:
+                        logger.info(f"  生成 {action} 视频失败")
+                finally:
+                    # 清理临时缩放文件
+                    if os.path.exists(resized_avatar):
+                        try:
+                            os.remove(resized_avatar)
+                        except:
+                            pass
             else:
                 logger.info(f"  不支持的动作: {action}")
 

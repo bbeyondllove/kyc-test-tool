@@ -184,6 +184,7 @@ async def auto_kyc(
     **参数:**
     - **action**: 视频动作类型 (mouth_open, left_shake, right_shake, nod)
     """
+    user_id = None  # 初始化，避免 except 块中的 UnboundLocalError
     try:
         logger.info(f"[Auto KYC] 开始 - action: {action}")
 

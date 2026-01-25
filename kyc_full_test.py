@@ -596,13 +596,7 @@ def generate_video_with_liveportrait(source_image, driving_source, output_path):
         "-s", source_image_abs,
         "-d", driving_path_abs,
         "-o", output_parent_abs,
-        "--driving-smooth-observation-variance", "1e-4",  # 极度平滑，最大程度减少抖动
-        "--driving-multiplier", "0.8",  # 降低驱动强度，减少动作幅度
-        "--flag-relative-motion", "True",  # 使用相对运动，更稳定
-        "--flag-do-rot", "True",  # 启用旋转对齐，第一帧正视前方
-        "--flag-normalize-lip", "True",  # 规范化嘴巴初始状态，避免闭眼帧
-        "--animation-region", "pose",  # 只做头部姿态动画，去除表情(Exp)
-        "--no-flag-write-concat"  # 禁用 concat 视频生成
+        "--no-flag-write-concat"
     ]
 
     try:

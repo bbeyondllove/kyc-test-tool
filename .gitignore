@@ -17,19 +17,12 @@ ENV/
 
 # LivePortrait large files
 LivePortrait/pretrained_weights/
-LivePortrait/*.pth
-LivePortrait/*/*.pth
-LivePortrait/weights/
-*.pth
-*.onnx
-*.pkl
+
 
 # Test outputs
 kyc_test/
 output/
 *.avi
-*.jpg
-*.png
 
 # Temporary files
 *.tmp

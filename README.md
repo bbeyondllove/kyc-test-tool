@@ -17,10 +17,35 @@ KYC 自动化测试工具 - 支持身份证认证和视频认证的完整流程�
    ```bash
    mkdir -p cache/liveportrait
    ```
-   
-   > **说明**：`logs` 和 `kyc_test` 目录由程序自动创建，无需手动操作。
 
-2. **构建并启动服务**
+2. **下载模型权重文件**
+
+   pretrained_weights 目录包含 LivePortrait 模型所需的预训练权重，需要手动下载：
+
+   **方法1：从 Hugging Face 下载**
+   ```bash
+   # 创建目录
+   mkdir -p LivePortrait/pretrained_weights
+
+   # 下载所需模型文件（需要先安装 huggingface-hub）
+   pip install huggingface-hub
+   huggingface-cli download kwai-kwai-kwai/LivePortrait --local-dir ./LivePortrait/pretrained_weights
+   ```
+
+   **方法2：手动下载**
+
+   请从以下开源仓库下载模型文件：
+   - Hugging Face: https://huggingface.co/kwai-kwai-kwai/LivePortrait
+   - 或访问 LivePortrait 官方 GitHub: https://github.com/KwaiVGI/LivePortrait
+
+   将下载的 `pretrained_weights` 文件夹放置到项目根目录下的 `LivePortrait/` 目录中。
+
+   **注意事项：**
+   - 模型文件较大（约 2-3GB），下载请耐心等待
+   - 确保下载的文件完整，否则会导致服务启动失败
+   - 如果使用国内网络，建议配置 Hugging Face 镜像加速
+
+3. **构建并启动服务**
    ```bash
    # 构建 Docker 镜像
    docker-compose build
